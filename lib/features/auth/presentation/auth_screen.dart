@@ -1,18 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/app_colors.dart';
-import '../../../core/services/user_profile_service.dart';
+import '../../../core/constants/app_sizes.dart';
 import '../../../core/utils/account_scope.dart';
-import '../data/auth_providers.dart';
-import '../../expenses/domain/expense_notifier.dart';
-import '../../habits/domain/habit_notifier.dart';
-import '../../journal/domain/journal_notifier.dart';
-import '../../notes/domain/note_notifier.dart';
-import '../../tasks/domain/task_notifier.dart';
+import '../data/auth_repository.dart';
+
+final _authRepositoryProvider = Provider((ref) => AuthRepository());
 
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
@@ -23,12 +19,13 @@ class AuthScreen extends ConsumerStatefulWidget {
 
 class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool isLogin = true;
-  final TextEditingController emailController = TextEditingController();
-  final TextEditingController passwordController = TextEditingController();
-  final TextEditingController confirmPasswordController =
-      TextEditingController();
-  bool isPasswordVisible = false;
   bool isLoading = false;
+  bool isPasswordVisible = false;
+  bool isConfirmPasswordVisible = false;
+
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+  final confirmPasswordController = TextEditingController();
 
   @override
   void dispose() {
@@ -38,177 +35,91 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     super.dispose();
   }
 
-  Future<void> _handleAuth() async {
-    final email = emailController.text.trim().toLowerCase();
+  String? _validate() {
+    final email = emailController.text.trim();
     final password = passwordController.text.trim();
-    final confirmPassword = confirmPasswordController.text.trim();
 
-    if (email.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter your email'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
+    if (email.isEmpty) return 'Please enter your email';
+    if (!email.contains('@')) return 'Please enter a valid email';
+    if (password.isEmpty) return 'Please enter your password';
+    if (password.length < 6) return 'Password must be at least 6 characters';
+    if (!isLogin && confirmPasswordController.text.trim() != password) {
+      return 'Passwords do not match';
+    }
+    return null;
+  }
+
+  Future<void> _handleAuth() async {
+    final validationError = _validate();
+    if (validationError != null) {
+      _showSnackBar(validationError, isError: true);
       return;
     }
 
-    if (!email.contains('@')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter a valid email'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-      return;
-    }
+    setState(() => isLoading = true);
 
-    if (password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Please enter your password'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-      return;
-    }
-
-    if (!isLogin && password != confirmPassword) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Passwords do not match'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      isLoading = true;
-    });
+    final repo = ref.read(_authRepositoryProvider);
+    final email = emailController.text.trim().toLowerCase();
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final authRepository = ref.read(authRepositoryProvider);
-
-      if (!isLogin) {
-        // Sign up
-        final error = await authRepository.signUp(email, password);
+      if (isLogin) {
+        final error = await repo.login(email, passwordController.text.trim());
         if (error != null) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(error),
-              backgroundColor: AppColors.error,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-          );
-          setState(() {
-            isLoading = false;
-          });
+          _showSnackBar(error, isError: true);
+          setState(() => isLoading = false);
           return;
         }
 
-        // Success: persist email and userId
+        // Set account scope
         await AccountScope.setCurrentUserEmail(email);
-        await prefs.setString('userEmail', email);
-        final firebaseUser = FirebaseAuth.instance.currentUser;
-        if (firebaseUser != null) {
-          await prefs.setString('userId', firebaseUser.uid);
+
+        // Check if onboarding was already completed for this user
+        final prefs = await SharedPreferences.getInstance();
+        final onboardingKey = AccountScope.scopedPrefKey('hasCompletedOnboarding');
+        final hasOnboarded = prefs.getBool(onboardingKey) ?? false;
+
+        if (!mounted) return;
+
+        if (hasOnboarded) {
+          // Already set up — go straight to home, data is intact
+          context.go('/home');
+        } else {
+          // First time logging in on this device — need onboarding
+          context.go('/onboarding/welcome');
+        }
+      } else {
+        // Sign up
+        final error = await repo.signUp(email, passwordController.text.trim());
+        if (error != null) {
+          _showSnackBar(error, isError: true);
+          setState(() => isLoading = false);
+          return;
         }
 
-        await prefs.setBool(
-          AccountScope.scopedPrefKey('hasCompletedOnboarding'),
-          false,
-        );
-
-        _resetScopedProviders();
+        await AccountScope.setCurrentUserEmail(email);
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Account created'),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        );
-        context.go('/onboarding/welcome');
-        return;
-      }
-
-      // Login flow
-      final error = await authRepository.login(email, password);
-      if (error != null) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(error),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-        );
-        setState(() {
-          isLoading = false;
-        });
-        return;
-      }
-
-      // Success: persist email and userId
-      await AccountScope.setCurrentUserEmail(email);
-      await prefs.setString('userEmail', email);
-      final firebaseUser = FirebaseAuth.instance.currentUser;
-      if (firebaseUser != null) {
-        await prefs.setString('userId', firebaseUser.uid);
-      }
-
-      await UserProfileService.loadProfileFromFirebase(firebaseUser?.uid);
-
-      _resetScopedProviders();
-
-      final completed = prefs.getBool(AccountScope.scopedPrefKey('hasCompletedOnboarding')) ?? false;
-      if (!mounted) return;
-      if (completed) {
-        context.go('/home');
-      } else {
+        // New account always goes through onboarding
         context.go('/onboarding/welcome');
       }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Something went wrong. Please try again.'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-      }
+      _showSnackBar('Something went wrong. Try again.', isError: true);
+      setState(() => isLoading = false);
     }
   }
 
-  void _resetScopedProviders() {
-    ref.invalidate(tasksProvider);
-    ref.invalidate(notesProvider);
-    ref.invalidate(expensesProvider);
-    ref.invalidate(habitsProvider);
-    ref.invalidate(journalProvider);
-    ref.invalidate(todayHabitStatusProvider);
+  void _showSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? AppColors.error : AppColors.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
   }
 
   @override
@@ -220,91 +131,83 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(
             children: [
-              const SizedBox(height: 48),
-              const Text(
-                'TrackIt',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                ),
+              const SizedBox(height: 60),
+              // App identity
+              Column(
+                children: [
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Center(
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: AppColors.tasks,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'TrackIt',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'main character mode: on ✨',
+                    style: TextStyle(
+                      color: AppColors.textHint,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 40),
+
+              // Auth card
               Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(24),
                 ),
+                padding: const EdgeInsets.all(24),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                isLogin = true;
-                              });
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              decoration: BoxDecoration(
-                                color: isLogin
-                                    ? AppColors.tasks
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                'Login',
-                                style: TextStyle(
-                                  color: isLogin
-                                      ? Colors.white
-                                      : AppColors.textHint,
-                                  fontWeight: isLogin
-                                      ? FontWeight.bold
-                                      : FontWeight.w500,
-                                ),
-                              ),
-                            ),
+                    // Toggle
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceVariant,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          _ToggleTab(
+                            label: 'Login',
+                            isSelected: isLogin,
+                            onTap: () => setState(() => isLogin = true),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                isLogin = false;
-                              });
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 10),
-                              decoration: BoxDecoration(
-                                color: !isLogin
-                                    ? AppColors.tasks
-                                    : Colors.transparent,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              alignment: Alignment.center,
-                              child: Text(
-                                'Sign Up',
-                                style: TextStyle(
-                                  color: !isLogin
-                                      ? Colors.white
-                                      : AppColors.textHint,
-                                  fontWeight: !isLogin
-                                      ? FontWeight.bold
-                                      : FontWeight.w500,
-                                ),
-                              ),
-                            ),
+                          _ToggleTab(
+                            label: 'Sign Up',
+                            isSelected: !isLogin,
+                            onTap: () => setState(() => isLogin = false),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 24),
+
+                    // Email
                     TextField(
                       controller: emailController,
                       keyboardType: TextInputType.emailAddress,
@@ -312,99 +215,82 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
                         hintText: 'Email address',
-                        hintStyle: TextStyle(color: AppColors.textHint),
                         prefixIcon: Icon(
                           Icons.email_outlined,
                           color: AppColors.textHint,
-                        ),
-                        filled: true,
-                        fillColor: AppColors.surfaceVariant,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
+                          size: 20,
                         ),
                       ),
                     ),
                     const SizedBox(height: 16),
+
+                    // Password
                     TextField(
                       controller: passwordController,
                       obscureText: !isPasswordVisible,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
                         hintText: 'Password',
-                        hintStyle: TextStyle(color: AppColors.textHint),
                         prefixIcon: Icon(
                           Icons.lock_outline,
                           color: AppColors.textHint,
+                          size: 20,
                         ),
                         suffixIcon: IconButton(
-                          onPressed: () {
-                            setState(() {
-                              isPasswordVisible = !isPasswordVisible;
-                            });
-                          },
+                          onPressed: () => setState(
+                            () => isPasswordVisible = !isPasswordVisible,
+                          ),
                           icon: Icon(
                             isPasswordVisible
                                 ? Icons.visibility_off_outlined
                                 : Icons.visibility_outlined,
                             color: AppColors.textHint,
+                            size: 20,
                           ),
-                        ),
-                        filled: true,
-                        fillColor: AppColors.surfaceVariant,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
                         ),
                       ),
                     ),
+
+                    // Confirm password for signup
                     if (!isLogin) ...[
                       const SizedBox(height: 16),
                       TextField(
                         controller: confirmPasswordController,
-                        obscureText: !isPasswordVisible,
+                        obscureText: !isConfirmPasswordVisible,
                         style: const TextStyle(color: Colors.white),
                         decoration: InputDecoration(
                           hintText: 'Confirm password',
-                          hintStyle: TextStyle(color: AppColors.textHint),
                           prefixIcon: Icon(
                             Icons.lock_outline,
                             color: AppColors.textHint,
+                            size: 20,
                           ),
                           suffixIcon: IconButton(
-                            onPressed: () {
-                              setState(() {
-                                isPasswordVisible = !isPasswordVisible;
-                              });
-                            },
+                            onPressed: () => setState(
+                              () => isConfirmPasswordVisible =
+                                  !isConfirmPasswordVisible,
+                            ),
                             icon: Icon(
-                              isPasswordVisible
+                              isConfirmPasswordVisible
                                   ? Icons.visibility_off_outlined
                                   : Icons.visibility_outlined,
                               color: AppColors.textHint,
+                              size: 20,
                             ),
-                          ),
-                          filled: true,
-                          fillColor: AppColors.surfaceVariant,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide.none,
                           ),
                         ),
                       ),
                     ],
+
+                    // Forgot password
                     if (isLogin) ...[
                       const SizedBox(height: 8),
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Password reset coming soon!'),
-                              ),
-                            );
-                          },
+                          onPressed: () => _showSnackBar(
+                            'Password reset coming soon!',
+                          ),
                           child: Text(
                             'Forgot password?',
                             style: TextStyle(
@@ -414,34 +300,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           ),
                         ),
                       ),
-                    ],
-                    const SizedBox(height: 24),
+                    ] else
+                      const SizedBox(height: 24),
+
+                    // Submit button
                     SizedBox(
                       width: double.infinity,
-                      height: 52,
                       child: ElevatedButton(
                         onPressed: isLoading ? null : _handleAuth,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.tasks,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
                         child: isLoading
                             ? const SizedBox(
                                 width: 20,
                                 height: 20,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    Colors.white,
-                                  ),
+                                  color: Colors.white,
                                 ),
                               )
                             : Text(
                                 isLogin ? 'Login' : 'Create Account',
                                 style: const TextStyle(
-                                  color: Colors.white,
+                                  fontSize: 16,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -451,32 +330,28 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 ),
               ),
               const SizedBox(height: 32),
+
+              // Google option
               Row(
                 children: [
-                  Expanded(
-                    child: Divider(color: AppColors.border, thickness: 1),
-                  ),
+                  Expanded(child: Divider(color: AppColors.border)),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Text(
                       'or',
-                      style: TextStyle(color: AppColors.textHint, fontSize: 14),
+                      style: TextStyle(
+                        color: AppColors.textHint,
+                        fontSize: 14,
+                      ),
                     ),
                   ),
-                  Expanded(
-                    child: Divider(color: AppColors.border, thickness: 1),
-                  ),
+                  Expanded(child: Divider(color: AppColors.border)),
                 ],
               ),
               const SizedBox(height: 24),
               GestureDetector(
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Google sign in coming soon!'),
-                    ),
-                  );
-                },
+                onTap: () =>
+                    _showSnackBar('Google sign in coming soon!'),
                 child: Container(
                   width: double.infinity,
                   height: 52,
@@ -499,7 +374,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       const SizedBox(width: 12),
                       const Text(
                         'Continue with Google',
-                        style: TextStyle(color: Colors.white, fontSize: 16),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                        ),
                       ),
                     ],
                   ),
@@ -507,6 +385,45 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               ),
               const SizedBox(height: 32),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ToggleTab extends StatelessWidget {
+  const _ToggleTab({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.tasks : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: isSelected ? Colors.white : AppColors.textHint,
+              fontWeight:
+                  isSelected ? FontWeight.bold : FontWeight.normal,
+              fontSize: 14,
+            ),
           ),
         ),
       ),

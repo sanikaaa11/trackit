@@ -1,214 +1,243 @@
-import 'dart:math' as math;
-
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/constants/app_colors.dart';
-import '../../../shared/pdf_service.dart';
+import '../../../core/constants/app_sizes.dart';
+import '../../../shared/ai_service.dart';
 import '../domain/expense_notifier.dart';
 
-class ExpenseReportScreen extends ConsumerWidget {
+class ExpenseReportScreen extends ConsumerStatefulWidget {
   const ExpenseReportScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final selectedMonth = ref.watch(selectedMonthProvider);
-    final totalSpent = ref.watch(totalSpentProvider);
-    final balance = ref.watch(balanceProvider);
-    final categoryTotals = ref.watch(categoryTotalsProvider);
+  ConsumerState<ExpenseReportScreen> createState() =>
+      _ExpenseReportScreenState();
+}
+
+class _ExpenseReportScreenState
+    extends ConsumerState<ExpenseReportScreen> {
+  DateTime selectedMonth = DateTime.now();
+  String? aiInsight;
+  bool isLoadingAi = false;
+
+  Future<void> _getAiInsight() async {
+    setState(() => isLoadingAi = true);
+
+    final repository = ref.read(expenseRepositoryProvider);
+    final categoryTotals = repository.getCategoryTotals(
+      selectedMonth.month,
+      selectedMonth.year,
+    );
+    final budget = repository.getMonthlyBudget();
+
+    try {
+      final insight = await ref.read(aiServiceProvider).getExpenseSuggestions(
+        categoryTotals,
+        budget,
+      );
+      setState(() {
+        aiInsight = insight;
+        isLoadingAi = false;
+      });
+    } catch (e) {
+      setState(() {
+        aiInsight = 'Could not load AI insights right now. Check your internet and try again.';
+        isLoadingAi = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final expenses = ref.watch(expensesProvider);
+    final repository = ref.watch(expenseRepositoryProvider);
 
-    final monthExpenses = expenses.where((expense) {
-      return !expense.isIncome &&
-          expense.date.year == selectedMonth.year &&
-          expense.date.month == selectedMonth.month;
-    }).toList();
+    final monthExpenses = expenses
+        .where(
+          (e) =>
+              !e.isIncome &&
+              e.date.month == selectedMonth.month &&
+              e.date.year == selectedMonth.year,
+        )
+        .toList();
 
-    final dailyTotals = _buildDailyTotals(monthExpenses);
-    final avgPerDay = dailyTotals.isEmpty
-        ? 0.0
-        : dailyTotals.values.fold(0.0, (sum, value) => sum + value) /
-              dailyTotals.length;
-
-    final monthTitle = DateFormat('MMMM yyyy').format(selectedMonth);
+    final totalSpent =
+        monthExpenses.fold<double>(0, (sum, e) => sum + e.amount);
+    final budget = repository.getMonthlyBudget();
+    final remaining = budget - totalSpent;
+    final categoryTotals = repository.getCategoryTotals(
+      selectedMonth.month,
+      selectedMonth.year,
+    );
 
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: AppColors.background,
         elevation: 0,
-        leading: IconButton(
-          onPressed: () {
-            final prev = DateTime(
-              selectedMonth.year,
-              selectedMonth.month - 1,
-              1,
-            );
-            ref.read(selectedMonthProvider.notifier).state = prev;
-          },
-          icon: const Icon(Icons.chevron_left, color: Colors.white),
-        ),
-        title: Text(
-          monthTitle,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GestureDetector(
+              onTap: () => setState(() {
+                selectedMonth = DateTime(
+                  selectedMonth.year,
+                  selectedMonth.month - 1,
+                );
+              }),
+              child: Icon(Icons.chevron_left, color: Colors.white),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              DateFormat('MMMM yyyy').format(selectedMonth),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => setState(() {
+                selectedMonth = DateTime(
+                  selectedMonth.year,
+                  selectedMonth.month + 1,
+                );
+              }),
+              child: Icon(Icons.chevron_right, color: Colors.white),
+            ),
+          ],
         ),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: Icon(
-              Icons.picture_as_pdf_outlined,
-              color: AppColors.expenses,
-            ),
-            tooltip: 'Export PDF',
-            onPressed: () async {
-              try {
-                final expenses = ref.read(expensesProvider).where((expense) {
-                  final selected = ref.read(selectedMonthProvider);
-                  return expense.date.month == selected.month &&
-                      expense.date.year == selected.year;
-                }).toList();
-
-                final budget = ref
-                    .read(expenseRepositoryProvider)
-                    .getMonthlyBudget();
-                final categoryTotals = ref.read(categoryTotalsProvider);
-                final monthYear = DateFormat(
-                  'MMMM_yyyy',
-                ).format(ref.read(selectedMonthProvider));
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Generating PDF...'),
-                    duration: Duration(seconds: 1),
-                    backgroundColor: AppColors.surface,
-                  ),
-                );
-
-                await ref
-                    .read(pdfServiceProvider)
-                    .exportExpenseReport(
-                      expenses: expenses,
-                      monthlyBudget: budget,
-                      monthYear: monthYear,
-                      categoryTotals: categoryTotals,
-                    );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Export failed: $e'),
-                    backgroundColor: AppColors.error,
-                  ),
-                );
-              }
-            },
-          ),
-          IconButton(
-            onPressed: () {
-              final next = DateTime(
-                selectedMonth.year,
-                selectedMonth.month + 1,
-                1,
-              );
-              ref.read(selectedMonthProvider.notifier).state = next;
-            },
-            icon: const Icon(Icons.chevron_right, color: Colors.white),
-          ),
-        ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(AppSizes.md),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               'MONTHLY REPORT',
               style: TextStyle(
                 color: AppColors.expenses,
-                fontSize: 11,
+                fontSize: AppSizes.fontXs,
                 letterSpacing: 1.5,
               ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
+
+            // Stat cards
             Row(
               children: [
                 Expanded(
                   child: _StatCard(
-                    label: 'Total Spent',
-                    value: totalSpent,
+                    label: 'TOTAL SPENT',
+                    value: '₹${NumberFormat('#,##0').format(totalSpent)}',
                     valueColor: AppColors.expenses,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _StatCard(
-                    label: 'Budget Left',
-                    value: balance,
-                    valueColor: balance < 0 ? AppColors.error : Colors.white,
+                    label: 'BUDGET LEFT',
+                    value: '₹${NumberFormat('#,##0').format(remaining.abs())}',
+                    valueColor: remaining >= 0
+                        ? Colors.white
+                        : AppColors.error,
+                    prefix: remaining < 0 ? '-' : '',
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 24),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Spending Breakdown',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    height: 200,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        PieChart(
-                          PieChartData(
-                            centerSpaceRadius: 60,
-                            sectionsSpace: 2,
-                            sections: _buildPieSections(categoryTotals),
-                          ),
-                        ),
-                        Text(
-                          'Total\n₹${totalSpent.toStringAsFixed(0)}',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: AppColors.textPrimary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  ..._buildLegend(categoryTotals),
-                ],
-              ),
-            ),
             const SizedBox(height: 16),
+
+            // Pie chart
+            if (categoryTotals.isNotEmpty)
+              Container(
+                padding: EdgeInsets.all(AppSizes.md),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(AppSizes.radiusLg),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Spending Breakdown',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 200,
+                      child: PieChart(
+                        PieChartData(
+                          centerSpaceRadius: 60,
+                          sections: _buildPieSections(
+                            categoryTotals,
+                            totalSpent,
+                          ),
+                          borderData: FlBorderData(show: false),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Legend
+                    ...categoryTotals.entries.map((e) {
+                      final pct = totalSpent == 0
+                          ? 0
+                          : (e.value / totalSpent * 100).round();
+                      final color = _categoryColor(e.key);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: color,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                e.key,
+                                style: TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '$pct%',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 16),
+
+            // Bar chart
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(AppSizes.md),
               decoration: BoxDecoration(
                 color: AppColors.surface,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(AppSizes.radiusLg),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -224,232 +253,249 @@ class ExpenseReportScreen extends ConsumerWidget {
                         ),
                       ),
                       const Spacer(),
-                      Text(
-                        'AVG ₹${avgPerDay.toStringAsFixed(0)}/day',
-                        style: TextStyle(
-                          color: AppColors.textHint,
-                          fontSize: 12,
+                      if (monthExpenses.isNotEmpty)
+                        Text(
+                          'AVG ₹${(totalSpent / DateTime(selectedMonth.year, selectedMonth.month + 1, 0).day).toStringAsFixed(0)}/day',
+                          style: TextStyle(
+                            color: AppColors.textHint,
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                   const SizedBox(height: 16),
                   SizedBox(
                     height: 150,
-                    child: BarChart(
-                      BarChartData(
-                        gridData: FlGridData(
-                          show: true,
-                          drawHorizontalLine: true,
-                          horizontalInterval: math.max(
-                            1,
-                            _maxY(dailyTotals) / 4,
-                          ),
-                          getDrawingHorizontalLine: (value) {
-                            return FlLine(
-                              color: AppColors.border,
-                              strokeWidth: 1,
-                            );
-                          },
-                          drawVerticalLine: false,
-                        ),
-                        borderData: FlBorderData(show: false),
-                        titlesData: FlTitlesData(
-                          leftTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                          rightTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                          topTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false),
-                          ),
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              interval: 5,
-                              getTitlesWidget: (value, meta) {
-                                final day = value.toInt();
-                                return Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Text(
-                                    '$day',
-                                    style: TextStyle(
-                                      color: AppColors.textHint,
-                                      fontSize: 10,
-                                    ),
-                                  ),
-                                );
-                              },
+                    child: monthExpenses.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No expenses this month',
+                              style: TextStyle(
+                                color: AppColors.textHint,
+                                fontSize: 13,
+                              ),
                             ),
-                          ),
-                        ),
-                        barGroups: _buildBarGroups(dailyTotals),
-                      ),
-                    ),
+                          )
+                        : _buildBarChart(monthExpenses),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {},
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.expenses,
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 52),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+
+            // AI Insights button + result
+            if (aiInsight != null) ...[
+              Container(
+                width: double.infinity,
+                padding: EdgeInsets.all(AppSizes.md),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(AppSizes.radiusLg),
+                  border: Border.all(
+                    color: AppColors.expenses.withOpacity(0.3),
                   ),
                 ),
-                child: const Text('Get AI Insights'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '✨',
+                          style: const TextStyle(fontSize: 16),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'AI Insights',
+                          style: TextStyle(
+                            color: AppColors.expenses,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: () => setState(() => aiInsight = null),
+                          child: Icon(
+                            Icons.close,
+                            color: AppColors.textHint,
+                            size: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      aiInsight!,
+                      style: TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 14,
+                        height: 1.6,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: isLoadingAi ? null : _getAiInsight,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.expenses,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                icon: isLoadingAi
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('✨', style: TextStyle(fontSize: 16)),
+                label: Text(
+                  isLoadingAi ? 'Getting insights...' : 'Get AI Insights',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
     );
   }
 
-  List<PieChartSectionData> _buildPieSections(Map<String, double> totals) {
-    if (totals.isEmpty) {
-      return [
-        PieChartSectionData(
-          value: 1,
-          color: AppColors.surfaceVariant,
-          radius: 34,
-          title: '',
-        ),
-      ];
-    }
-
+  List<PieChartSectionData> _buildPieSections(
+    Map<String, double> totals,
+    double total,
+  ) {
     final colors = [
-      AppColors.expenses,
       AppColors.tasks,
       AppColors.notes,
-      AppColors.journal,
       AppColors.habits,
-      AppColors.onboarding,
-      AppColors.success,
-      AppColors.warning,
-      AppColors.error,
+      AppColors.expenses,
+      AppColors.journal,
+      Colors.purple,
+      Colors.pink,
+      Colors.amber,
     ];
-
-    final entries = totals.entries.toList();
-    return List.generate(entries.length, (index) {
-      final entry = entries[index];
+    int i = 0;
+    return totals.entries.map((e) {
+      final color = colors[i % colors.length];
+      i++;
       return PieChartSectionData(
-        value: entry.value,
-        color: colors[index % colors.length],
-        radius: 34,
-        title: '',
-      );
-    });
-  }
-
-  List<Widget> _buildLegend(Map<String, double> totals) {
-    final sum = totals.values.fold(0.0, (a, b) => a + b);
-    final colors = [
-      AppColors.expenses,
-      AppColors.tasks,
-      AppColors.notes,
-      AppColors.journal,
-      AppColors.habits,
-      AppColors.onboarding,
-      AppColors.success,
-      AppColors.warning,
-      AppColors.error,
-    ];
-
-    final entries = totals.entries.toList();
-    if (entries.isEmpty) {
-      return [
-        Text(
-          'No category data yet',
-          style: TextStyle(color: AppColors.textHint, fontSize: 12),
-        ),
-      ];
-    }
-
-    return List.generate(entries.length, (index) {
-      final entry = entries[index];
-      final percentage = sum == 0 ? 0 : (entry.value / sum) * 100;
-      final color = colors[index % colors.length];
-
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(
-          children: [
-            Container(
-              width: 10,
-              height: 10,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                entry.key,
-                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            Text(
-              '${percentage.toStringAsFixed(0)}%',
-              style: TextStyle(color: AppColors.textPrimary, fontSize: 12),
-            ),
-          ],
-        ),
-      );
-    });
-  }
-
-  Map<int, double> _buildDailyTotals(List<dynamic> expenses) {
-    final totals = <int, double>{};
-    for (final expense in expenses) {
-      final day = expense.date.day;
-      totals[day] = (totals[day] ?? 0) + expense.amount;
-    }
-    return totals;
-  }
-
-  List<BarChartGroupData> _buildBarGroups(Map<int, double> dailyTotals) {
-    if (dailyTotals.isEmpty) {
-      return List.generate(7, (index) {
-        return BarChartGroupData(
-          x: index + 1,
-          barRods: [
-            BarChartRodData(
-              toY: 0,
-              color: AppColors.expenses,
-              width: 8,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ],
-        );
-      });
-    }
-
-    final sortedDays = dailyTotals.keys.toList()..sort();
-    return sortedDays.map((day) {
-      return BarChartGroupData(
-        x: day,
-        barRods: [
-          BarChartRodData(
-            toY: dailyTotals[day] ?? 0,
-            color: AppColors.expenses,
-            width: 8,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ],
+        value: e.value,
+        color: color,
+        radius: 40,
+        showTitle: false,
       );
     }).toList();
   }
 
-  double _maxY(Map<int, double> dailyTotals) {
-    if (dailyTotals.isEmpty) return 0;
-    return dailyTotals.values.reduce(math.max);
+  Color _categoryColor(String category) {
+    const map = {
+      'Groceries': AppColors.expenses,
+      'Food & Dining': AppColors.tasks,
+      'Transport': AppColors.habits,
+      'Medical': Colors.pink,
+      'Fees & Education': AppColors.notes,
+      'Clothing': Colors.purple,
+      'Entertainment': Colors.amber,
+      'Utilities': Colors.orange,
+      'Others': Colors.grey,
+    };
+    return map[category] ?? Colors.grey;
+  }
+
+  Widget _buildBarChart(expenses) {
+    final daysInMonth = DateTime(
+      selectedMonth.year,
+      selectedMonth.month + 1,
+      0,
+    ).day;
+
+    final dailyTotals = <int, double>{};
+    for (final e in expenses) {
+      dailyTotals[e.date.day] =
+          (dailyTotals[e.date.day] ?? 0) + e.amount;
+    }
+
+    final maxVal = dailyTotals.values.isEmpty
+        ? 1.0
+        : dailyTotals.values.reduce((a, b) => a > b ? a : b);
+
+    return BarChart(
+      BarChartData(
+        maxY: maxVal * 1.2,
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) => FlLine(
+            color: AppColors.border,
+            strokeWidth: 0.5,
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        titlesData: FlTitlesData(
+          leftTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (value, _) {
+                final day = value.toInt();
+                if (day == 1 || day == 10 || day == 20 || day == daysInMonth) {
+                  return Text(
+                    '$day',
+                    style: TextStyle(
+                      color: AppColors.textHint,
+                      fontSize: 10,
+                    ),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+        ),
+        barGroups: List.generate(daysInMonth, (index) {
+          final day = index + 1;
+          return BarChartGroupData(
+            x: day,
+            barRods: [
+              BarChartRodData(
+                toY: dailyTotals[day] ?? 0,
+                color: AppColors.expenses,
+                width: 4,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(2),
+                ),
+                backDrawRodData: BackgroundBarChartRodData(
+                  show: true,
+                  toY: maxVal * 1.2,
+                  color: AppColors.surfaceVariant,
+                ),
+              ),
+            ],
+          );
+        }),
+      ),
+    );
   }
 }
 
@@ -458,11 +504,13 @@ class _StatCard extends StatelessWidget {
     required this.label,
     required this.value,
     required this.valueColor,
+    this.prefix = '',
   });
 
   final String label;
-  final double value;
+  final String value;
   final Color valueColor;
+  final String prefix;
 
   @override
   Widget build(BuildContext context) {
@@ -470,22 +518,34 @@ class _StatCard extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AppSizes.radiusLg),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
-            style: TextStyle(color: AppColors.textHint, fontSize: 12),
+            style: TextStyle(
+              color: AppColors.textHint,
+              fontSize: AppSizes.fontXs,
+              letterSpacing: 1,
+            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           Text(
-            '₹${value.toStringAsFixed(0)}',
+            '$prefix$value',
             style: TextStyle(
               color: valueColor,
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            height: 2,
+            decoration: BoxDecoration(
+              color: AppColors.expenses,
+              borderRadius: BorderRadius.circular(1),
             ),
           ),
         ],
