@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:trackit/core/utils/notification_service.dart';
+import 'package:trackit/features/badges/data/badge_service.dart';
 
 import '../data/habit_model.dart';
 import '../data/habit_repository.dart';
@@ -82,11 +83,36 @@ class HabitNotifier extends StateNotifier<List<Habit>> {
     loadHabits();
   }
 
-  Future<void> toggleToday(String habitId) async {
+  Future<String?> toggleToday(String habitId) async {
     final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final wasCompletedBefore = repository.isCompletedForDate(habitId, today);
+
     await repository.toggleHabitForDate(habitId, today);
     // Force full reload so streaks recalculate
     loadHabits();
+
+    // Only check badges when this toggle just completed the habit
+    // (not when un-checking it).
+    if (wasCompletedBefore) return null;
+
+    final badgeService = ref.read(badgeServiceProvider);
+    final currentStreak = repository.getCurrentStreak(habitId);
+    final longestStreak = repository.getLongestStreak(habitId);
+    final maxStreak =
+        currentStreak > longestStreak ? currentStreak : longestStreak;
+
+    final allCompletedConsecutive =
+        repository.getAllCompletedConsecutiveStreak();
+    final exactlyOneConsecutive =
+        repository.getExactlyOneCompletedConsecutiveStreak();
+    final resumedAfterMiss = repository.hasResumedAfterMiss(habitId);
+
+    return await badgeService.checkAndAward('habit_toggled', {
+      'maxStreak': maxStreak,
+      'allCompletedConsecutive': allCompletedConsecutive,
+      'exactlyOneConsecutive': exactlyOneConsecutive,
+      'resumedAfterMiss': resumedAfterMiss,
+    });
   }
 
   Future<void> toggleMedicationDose(

@@ -7,6 +7,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_sizes.dart';
 import '../data/task_model.dart';
 import '../domain/task_notifier.dart';
+import '../../badges/presentation/badge_celebration_overlay.dart';
 
 class TasksScreen extends ConsumerWidget {
   const TasksScreen({super.key});
@@ -20,6 +21,18 @@ class TasksScreen extends ConsumerWidget {
       default:
         return tasks;
     }
+  }
+
+  void _showBadgeCelebration(BuildContext context, String badgeId) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.transparent,
+      builder: (ctx) => BadgeCelebrationOverlay(
+        badgeId: badgeId,
+        onDismiss: () => Navigator.of(ctx).pop(),
+      ),
+    );
   }
 
   @override
@@ -119,10 +132,13 @@ class TasksScreen extends ConsumerWidget {
                       final task = filteredTasks[index];
                       return _TaskCard(
                         task: task,
-                        onComplete: () {
-                          ref
+                        onComplete: () async {
+                          final badgeId = await ref
                               .read(tasksProvider.notifier)
                               .completeTask(task.id);
+                          if (badgeId != null && context.mounted) {
+                            _showBadgeCelebration(context, badgeId);
+                          }
                         },
                         onDelete: () {
                           ref.read(tasksProvider.notifier).deleteTask(task.id);

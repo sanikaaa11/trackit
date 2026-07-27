@@ -9,6 +9,7 @@ import '../../../core/constants/app_sizes.dart';
 import '../../../core/utils/account_scope.dart';
 import 'ai_chat_sheet.dart';
 import '../../badges/data/badge_service.dart';
+import '../../badges/presentation/badge_celebration_overlay.dart';
 import '../../expenses/domain/expense_notifier.dart';
 import '../../habits/domain/habit_notifier.dart';
 import '../../notes/domain/note_notifier.dart';
@@ -40,11 +41,38 @@ final _earnedBadgesProvider = Provider<List<Map<String, String>>>((ref) {
   return earned;
 });
 
-class DashboardScreen extends ConsumerWidget {
+class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAppOpenedBadge());
+  }
+
+  Future<void> _checkAppOpenedBadge() async {
+    final badgeService = ref.read(badgeServiceProvider);
+    final badgeId = await badgeService.checkAndAward('app_opened', {});
+    if (badgeId != null && mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: true,
+        barrierColor: Colors.transparent,
+        builder: (ctx) => BadgeCelebrationOverlay(
+          badgeId: badgeId,
+          onDismiss: () => Navigator.of(ctx).pop(),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final hour = DateTime.now().hour;
     final greeting = hour < 12
         ? 'Good morning,'
@@ -167,172 +195,172 @@ class DashboardScreen extends ConsumerWidget {
         ),
       ),
       body: SingleChildScrollView(
-  padding: EdgeInsets.all(AppSizes.md),
-  child: Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      SizedBox(height: AppSizes.sm),
-
-      // Module cards grid
-      GridView.count(
-        crossAxisCount: 2,
-        crossAxisSpacing: AppSizes.sm,
-        mainAxisSpacing: AppSizes.sm,
-        childAspectRatio: 1.2,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        children: [
-          _ModuleCard(
-            color: AppColors.tasks,
-            icon: Icons.check_circle_outline_rounded,
-            label: 'TASKS',
-            value: '$pendingTasks Pending',
-            onTap: () => context.go('/tasks'),
-          ),
-          _ModuleCard(
-            color: AppColors.notes,
-            icon: Icons.note_alt_outlined,
-            label: 'NOTES',
-            value: '${notes.length} Notes',
-            onTap: () => context.go('/notes'),
-          ),
-          _ModuleCard(
-            color: AppColors.expenses,
-            icon: Icons.account_balance_wallet_outlined,
-            label: 'EXPENSES',
-            value: '₹${NumberFormat('#,##0').format(monthlySpent)}',
-            onTap: () => context.go('/expenses'),
-          ),
-          _ModuleCard(
-            color: AppColors.journal,
-            icon: Icons.menu_book_outlined,
-            label: 'JOURNAL',
-            value: 'Write Today',
-            onTap: () => context.push('/journal'),
-          ),
-        ],
-      ),
-      SizedBox(height: AppSizes.md),
-
-      // Health card — ABOVE habits now
-      const HealthCard(),
-      SizedBox(height: AppSizes.md),
-
-      // Habits card
-      Container(
-        width: double.infinity,
         padding: EdgeInsets.all(AppSizes.md),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(AppSizes.radiusLg),
-        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            SizedBox(height: AppSizes.sm),
+
+            // Module cards grid
+            GridView.count(
+              crossAxisCount: 2,
+              crossAxisSpacing: AppSizes.sm,
+              mainAxisSpacing: AppSizes.sm,
+              childAspectRatio: 1.2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
               children: [
-                Icon(
-                  Icons.self_improvement_outlined,
-                  color: AppColors.habits,
+                _ModuleCard(
+                  color: AppColors.tasks,
+                  icon: Icons.check_circle_outline_rounded,
+                  label: 'TASKS',
+                  value: '$pendingTasks Pending',
+                  onTap: () => context.go('/tasks'),
                 ),
-                SizedBox(width: AppSizes.sm),
-                Text(
-                  'HABITS',
-                  style: TextStyle(
-                    color: AppColors.textHint,
-                    fontSize: AppSizes.fontXs,
-                    letterSpacing: 1,
-                  ),
+                _ModuleCard(
+                  color: AppColors.notes,
+                  icon: Icons.note_alt_outlined,
+                  label: 'NOTES',
+                  value: '${notes.length} Notes',
+                  onTap: () => context.go('/notes'),
                 ),
-                const Spacer(),
-                Text(
-                  '${(completedRatio * 100).round()}%',
-                  style: TextStyle(
-                    color: AppColors.habits,
-                    fontWeight: FontWeight.bold,
-                    fontSize: AppSizes.fontMd,
-                  ),
+                _ModuleCard(
+                  color: AppColors.expenses,
+                  icon: Icons.account_balance_wallet_outlined,
+                  label: 'EXPENSES',
+                  value: '₹${NumberFormat('#,##0').format(monthlySpent)}',
+                  onTap: () => context.go('/expenses'),
+                ),
+                _ModuleCard(
+                  color: AppColors.journal,
+                  icon: Icons.menu_book_outlined,
+                  label: 'JOURNAL',
+                  value: 'Write Today',
+                  onTap: () => context.push('/journal'),
                 ),
               ],
             ),
-            SizedBox(height: AppSizes.sm),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: completedRatio,
-                minHeight: 8,
-                color: AppColors.habits,
-                backgroundColor: AppColors.surfaceVariant,
-              ),
-            ),
-            SizedBox(height: AppSizes.sm),
-            Text(
-              '$todayCompletedHabits/$totalHabits completed today',
-              style: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      ),
-      SizedBox(height: AppSizes.md),
+            SizedBox(height: AppSizes.md),
 
-      // Recent Badges
-      Row(
-        children: [
-          Text(
-            'Recent Badges',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: AppSizes.fontLg,
+            // Health card — ABOVE habits now
+            const HealthCard(),
+            SizedBox(height: AppSizes.md),
+
+            // Habits card
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(AppSizes.md),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(AppSizes.radiusLg),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.self_improvement_outlined,
+                        color: AppColors.habits,
+                      ),
+                      SizedBox(width: AppSizes.sm),
+                      Text(
+                        'HABITS',
+                        style: TextStyle(
+                          color: AppColors.textHint,
+                          fontSize: AppSizes.fontXs,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${(completedRatio * 100).round()}%',
+                        style: TextStyle(
+                          color: AppColors.habits,
+                          fontWeight: FontWeight.bold,
+                          fontSize: AppSizes.fontMd,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: AppSizes.sm),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: completedRatio,
+                      minHeight: 8,
+                      color: AppColors.habits,
+                      backgroundColor: AppColors.surfaceVariant,
+                    ),
+                  ),
+                  SizedBox(height: AppSizes.sm),
+                  Text(
+                    '$todayCompletedHabits/$totalHabits completed today',
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const Spacer(),
-          if (earnedBadges.isNotEmpty)
-            GestureDetector(
-              onTap: () => context.push('/badges'),
-              child: Text(
-                'See all →',
-                style: TextStyle(
-                  color: AppColors.tasks,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
+            SizedBox(height: AppSizes.md),
+
+            // Recent Badges
+            Row(
+              children: [
+                Text(
+                  'Recent Badges',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: AppSizes.fontLg,
+                  ),
+                ),
+                const Spacer(),
+                if (earnedBadges.isNotEmpty)
+                  GestureDetector(
+                    onTap: () => context.push('/badges'),
+                    child: Text(
+                      'See all →',
+                      style: TextStyle(
+                        color: AppColors.tasks,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            SizedBox(height: AppSizes.sm),
+
+            if (earnedBadges.isEmpty)
+              Row(
+                children: [
+                  _LockedBadgePlaceholder(label: 'Complete a task'),
+                  SizedBox(width: AppSizes.sm),
+                  _LockedBadgePlaceholder(label: 'Write in journal'),
+                  SizedBox(width: AppSizes.sm),
+                  _LockedBadgePlaceholder(label: 'Build a streak'),
+                ],
+              )
+            else
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: earnedBadges.take(5).map((badge) {
+                    return _EarnedBadgeCard(
+                      badge: badge,
+                      onTap: () => context.push('/badges'),
+                    );
+                  }).toList(),
                 ),
               ),
-            ),
-        ],
-      ),
-      SizedBox(height: AppSizes.sm),
 
-      if (earnedBadges.isEmpty)
-        Row(
-          children: [
-            _LockedBadgePlaceholder(label: 'Complete a task'),
-            SizedBox(width: AppSizes.sm),
-            _LockedBadgePlaceholder(label: 'Write in journal'),
-            SizedBox(width: AppSizes.sm),
-            _LockedBadgePlaceholder(label: 'Build a streak'),
+            SizedBox(height: AppSizes.md),
           ],
-        )
-      else
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: earnedBadges.take(5).map((badge) {
-              return _EarnedBadgeCard(
-                badge: badge,
-                onTap: () => context.push('/badges'),
-              );
-            }).toList(),
-          ),
         ),
-
-      SizedBox(height: AppSizes.md),
-    ],
-  ),
-),
+      ),
     );
   }
 }

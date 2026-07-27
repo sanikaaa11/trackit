@@ -33,13 +33,13 @@ class JournalNotifier extends StateNotifier<List<JournalEntry>> {
     state = repository.getAllEntries();
   }
 
-  Future<void> saveEntry(JournalEntry entry) async {
+  Future<String?> saveEntry(JournalEntry entry) async {
     await repository.saveEntry(entry);
     loadEntries();
 
     // Badge check — dear diary
     final badgeService = ref.read(badgeServiceProvider);
-    await badgeService.checkAndAward('journal_written', {});
+    return await badgeService.checkAndAward('journal_written', {});
   }
 
   Future<void> deleteEntry(String id) async {

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:trackit/features/badges/data/badge_service.dart';
 
 import '../data/expense_model.dart';
 import '../data/expense_repository.dart';
@@ -8,23 +9,44 @@ final expenseRepositoryProvider = Provider((ref) => ExpenseRepository());
 final expensesProvider =
     StateNotifierProvider<ExpenseNotifier, List<Expense>>((ref) {
   final repository = ref.watch(expenseRepositoryProvider);
-  return ExpenseNotifier(repository);
+  return ExpenseNotifier(repository, ref);
 });
 
 class ExpenseNotifier extends StateNotifier<List<Expense>> {
-  ExpenseNotifier(this.repository) : super([]) {
+  ExpenseNotifier(this.repository, this.ref) : super([]) {
     loadExpenses();
   }
 
   final ExpenseRepository repository;
+  final Ref ref;
 
   void loadExpenses() {
     state = repository.getAllExpenses();
   }
 
-  Future<void> addExpense(Expense expense) async {
+  Future<String?> addExpense(Expense expense) async {
     await repository.addExpense(expense);
     loadExpenses();
+
+    if (expense.isIncome) return null;
+
+    // Badge check — budget villain
+    final monthlyBudget = repository.getMonthlyBudget();
+    final now = expense.date;
+    final monthSpent = repository
+        .getAllExpenses()
+        .where((e) =>
+            !e.isIncome &&
+            e.date.month == now.month &&
+            e.date.year == now.year)
+        .fold<double>(0, (sum, e) => sum + e.amount);
+
+    final isOverBudget = monthlyBudget > 0 && monthSpent > monthlyBudget;
+
+    final badgeService = ref.read(badgeServiceProvider);
+    return await badgeService.checkAndAward('expense_logged', {
+      'isOverBudget': isOverBudget,
+    });
   }
 
   Future<void> deleteExpense(String id) async {

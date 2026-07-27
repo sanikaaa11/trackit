@@ -46,7 +46,7 @@ class TaskNotifier extends StateNotifier<List<Task>> {
     );
   }
 
-  Future<void> completeTask(String id) async {
+  Future<String?> completeTask(String id) async {
     final task = state.firstWhere((t) => t.id == id);
     await repository.completeTask(id);
     loadTasks();
@@ -72,7 +72,7 @@ class TaskNotifier extends StateNotifier<List<Task>> {
         DateFormat('yyyy-MM-dd').format(task.dueDate!) ==
             DateFormat('yyyy-MM-dd').format(now);
 
-    await badgeService.checkAndAward('task_completed', {
+    return await badgeService.checkAndAward('task_completed', {
       'totalCompleted': totalCompleted,
       'completedThisWeek': completedThisWeek,
       'isOnDueDate': isOnDueDate,

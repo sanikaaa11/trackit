@@ -8,7 +8,6 @@ import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/utils/account_scope.dart';
 import 'core/utils/notification_service.dart';
-import 'features/badges/data/badge_service.dart';
 import 'features/expenses/data/expense_model.dart';
 import 'features/expenses/data/expense_repository.dart';
 import 'features/expenses/data/user_settings_model.dart';
@@ -51,10 +50,6 @@ Future<void> main() async {
   await Hive.openBox<UserModel>(AuthRepository.boxName);
 
   await NotificationService.init();
-
-  // Award badges on app open
-  final badgeService = BadgeService();
-  await badgeService.checkAndAward('app_opened', {});
 
   runApp(const ProviderScope(child: TrackItApp()));
 }

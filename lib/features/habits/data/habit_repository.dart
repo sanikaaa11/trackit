@@ -192,4 +192,81 @@ class HabitRepository {
       DateTime(date.year, date.month, date.day);
 
   String _formatDate(DateTime date) => DateFormat('yyyy-MM-dd').format(date);
+
+  // ── Cross-habit badge helpers ──────────────────────────────────────
+
+  /// Consecutive days (ending today, or yesterday if today isn't fully
+  /// done yet) where every active habit was completed.
+  int getAllCompletedConsecutiveStreak() {
+    final habits = getAllHabits();
+    if (habits.isEmpty) return 0;
+
+    bool dayFullyComplete(DateTime d) {
+      final dateStr = _formatDate(d);
+      return habits.every((h) => isCompletedForDate(h.id, dateStr));
+    }
+
+    final today = _startOfDay(DateTime.now());
+    var day = dayFullyComplete(today)
+        ? today
+        : today.subtract(const Duration(days: 1));
+
+    int streak = 0;
+    while (dayFullyComplete(day)) {
+      streak++;
+      day = day.subtract(const Duration(days: 1));
+    }
+    return streak;
+  }
+
+  /// Consecutive days (ending today, or yesterday if today isn't done
+  /// yet) where exactly one active habit was completed.
+  int getExactlyOneCompletedConsecutiveStreak() {
+    final habits = getAllHabits();
+    if (habits.isEmpty) return 0;
+
+    bool dayExactlyOne(DateTime d) {
+      final dateStr = _formatDate(d);
+      final count =
+          habits.where((h) => isCompletedForDate(h.id, dateStr)).length;
+      return count == 1;
+    }
+
+    final today = _startOfDay(DateTime.now());
+    var day = dayExactlyOne(today)
+        ? today
+        : today.subtract(const Duration(days: 1));
+
+    int streak = 0;
+    while (dayExactlyOne(day)) {
+      streak++;
+      day = day.subtract(const Duration(days: 1));
+    }
+    return streak;
+  }
+
+  /// True if this habit was completed today after 3+ consecutive missed
+  /// days (i.e. a gap of 4+ days since its last completion before today).
+  bool hasResumedAfterMiss(String habitId, {int missThreshold = 3}) {
+    final today = _startOfDay(DateTime.now());
+    final todayStr = _formatDate(today);
+
+    if (!isCompletedForDate(habitId, todayStr)) return false;
+
+    final priorCompletions = _completedDateSet(habitId)
+        .map(_parseDate)
+        .whereType<DateTime>()
+        .map(_startOfDay)
+        .where((d) => d.isBefore(today))
+        .toList()
+      ..sort((a, b) => a.compareTo(b));
+
+    if (priorCompletions.isEmpty) return false;
+
+    final lastBeforeToday = priorCompletions.last;
+    final gapDays = today.difference(lastBeforeToday).inDays;
+    final missedDays = gapDays - 1;
+
+    return missedDays >= missThreshold;
+  }
 }
