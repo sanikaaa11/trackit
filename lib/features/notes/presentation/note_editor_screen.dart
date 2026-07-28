@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_sizes.dart';
@@ -20,18 +19,28 @@ class NoteEditorScreen extends ConsumerStatefulWidget {
 class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
   late final TextEditingController titleController;
   late final TextEditingController bodyController;
-
-  bool isEditMode = false;
+  late final FocusNode bodyFocus;
   String colorLabel = '#1A1A1A';
   Note? existingNote;
+  bool isEditMode = false;
+  bool _isDirty = false;
 
-  final List<String> colorOptions = const [
+  static const List<String> _colorOptions = [
     '#1A1A1A',
-    '#378ADD',
-    '#7F77DD',
-    '#BA7517',
-    '#1D9E75',
-    '#D85A30',
+    '#1A2A3A',
+    '#1A2A1A',
+    '#2A1A2A',
+    '#2A1A1A',
+    '#2A2A1A',
+  ];
+
+  static const List<Color> _colorDisplay = [
+    Color(0xFF1A1A1A),
+    Color(0xFF1A2A3A),
+    Color(0xFF1A2A1A),
+    Color(0xFF2A1A2A),
+    Color(0xFF2A1A1A),
+    Color(0xFF2A2A1A),
   ];
 
   @override
@@ -39,302 +48,511 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
     super.initState();
     titleController = TextEditingController();
     bodyController = TextEditingController();
-    isEditMode = widget.noteId == 'new';
+    bodyFocus = FocusNode();
 
-    if (widget.noteId != 'new') {
+    if (widget.noteId == 'new') {
+      isEditMode = true;
+    } else {
       _loadExistingNote();
     }
+
+    titleController.addListener(() => setState(() => _isDirty = true));
+    bodyController.addListener(() => setState(() => _isDirty = true));
   }
 
   void _loadExistingNote() {
     final notes = ref.read(notesProvider);
-    final note = notes.where((n) => n.id == widget.noteId).firstOrNull;
-    if (note == null) return;
-
-    existingNote = note;
-    titleController.text = note.title;
-    bodyController.text = note.body;
-    colorLabel = note.colorLabel;
-  }
-
-  String get _displayTitle {
-    final title = titleController.text.trim();
-    if (title.isNotEmpty) return title;
-    return existingNote?.title.isNotEmpty == true
-        ? existingNote!.title
-        : 'Untitled';
-  }
-
-  Future<void> _saveNote() async {
-    final title = titleController.text.trim();
-    final body = bodyController.text.trim();
-
-    if (existingNote == null) {
-      final note = Note.create(
-        title: title.isEmpty ? 'Untitled' : title,
-        body: body,
-        colorLabel: colorLabel,
-      );
-      await ref.read(notesProvider.notifier).addNote(note);
-      existingNote = note;
-    } else {
-      existingNote!
-        ..title = title.isEmpty ? 'Untitled' : title
-        ..body = body
-        ..colorLabel = colorLabel;
-      await ref.read(notesProvider.notifier).updateNote(existingNote!);
+    try {
+      existingNote = notes.firstWhere((n) => n.id == widget.noteId);
+      titleController.text = existingNote!.title;
+      bodyController.text = existingNote!.body;
+      colorLabel = existingNote!.colorLabel;
+      isEditMode = false;
+    } catch (_) {
+      isEditMode = true;
     }
-
-    if (!mounted) return;
-    setState(() => isEditMode = false);
-  }
-
-  Future<void> _deleteNote() async {
-    final shouldDelete = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text(
-            'Delete note?',
-            style: TextStyle(color: Colors.white),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: Text(
-                'Cancel',
-                style: TextStyle(color: AppColors.textHint),
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              style: TextButton.styleFrom(foregroundColor: AppColors.error),
-              child: const Text('Delete'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (shouldDelete != true || existingNote == null) return;
-
-    await ref.read(notesProvider.notifier).deleteNote(existingNote!.id);
-    if (mounted) context.pop();
-  }
-
-  Color _parseColor(String hex) {
-    final value = hex.replaceAll('#', '');
-    return Color(int.parse('FF$value', radix: 16));
   }
 
   @override
   void dispose() {
     titleController.dispose();
     bodyController.dispose();
+    bodyFocus.dispose();
     super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (titleController.text.trim().isEmpty &&
+        bodyController.text.trim().isEmpty) {
+      context.pop();
+      return;
+    }
+
+    final notifier = ref.read(notesProvider.notifier);
+
+    if (existingNote != null) {
+      existingNote!.title = titleController.text.trim();
+      existingNote!.body = bodyController.text.trim();
+      existingNote!.colorLabel = colorLabel;
+      existingNote!.updatedAt = DateTime.now();
+      await notifier.updateNote(existingNote!);
+    } else {
+      final note = Note.create(
+        title: titleController.text.trim(),
+        body: bodyController.text.trim(),
+        colorLabel: colorLabel,
+      );
+      await notifier.addNote(note);
+    }
+
+    if (mounted) {
+      setState(() => isEditMode = false);
+      if (widget.noteId == 'new') context.pop();
+    }
+  }
+
+  // Insert bullet point at cursor position
+  void _insertBullet() {
+    final controller = bodyController;
+    final text = controller.text;
+    final selection = controller.selection;
+
+    if (!selection.isValid) {
+      // Just append bullet at end
+      final newText = text.isEmpty ? '• ' : '$text\n• ';
+      controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: newText.length),
+      );
+      return;
+    }
+
+    // Find start of current line
+    final cursorPos = selection.baseOffset;
+    int lineStart = cursorPos;
+    while (lineStart > 0 && text[lineStart - 1] != '\n') {
+      lineStart--;
+    }
+
+    final currentLine = text.substring(lineStart, cursorPos);
+    final alreadyHasBullet = currentLine.startsWith('• ');
+
+    if (alreadyHasBullet) {
+      // Remove bullet from current line
+      final newText = text.substring(0, lineStart) +
+          text.substring(lineStart + 2);
+      final newCursor = (cursorPos - 2).clamp(0, newText.length);
+      controller.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: newCursor),
+      );
+    } else {
+      // Add bullet to start of current line
+      final newText = text.substring(0, lineStart) +
+          '• ' +
+          text.substring(lineStart);
+      controller.value = TextEditingValue(
+        text: newText,
+        selection:
+            TextSelection.collapsed(offset: cursorPos + 2),
+      );
+    }
+
+    bodyFocus.requestFocus();
+  }
+
+  // Handle enter key to auto-continue bullet list
+  void _onBodyChanged(String value) {
+    final text = bodyController.text;
+    final selection = bodyController.selection;
+    if (!selection.isValid) return;
+
+    // Check if user just pressed enter after a bullet line
+    final cursorPos = selection.baseOffset;
+    if (cursorPos < 1) return;
+
+    if (text[cursorPos - 1] == '\n' && cursorPos >= 3) {
+      // Find the previous line
+      int prevLineStart = cursorPos - 2;
+      while (prevLineStart > 0 && text[prevLineStart - 1] != '\n') {
+        prevLineStart--;
+      }
+      final prevLine = text.substring(prevLineStart, cursorPos - 1);
+
+      if (prevLine == '• ') {
+        // Empty bullet — remove it and stop the list
+        final newText = text.substring(0, prevLineStart) +
+            text.substring(cursorPos - 1);
+        bodyController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(
+            offset: prevLineStart,
+          ),
+        );
+      } else if (prevLine.startsWith('• ')) {
+        // Continue bullet list
+        final newText = text.substring(0, cursorPos) +
+            '• ' +
+            text.substring(cursorPos);
+        bodyController.value = TextEditingValue(
+          text: newText,
+          selection: TextSelection.collapsed(
+            offset: cursorPos + 2,
+          ),
+        );
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final updatedAt = existingNote?.updatedAt ?? DateTime.now();
-
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppColors.background,
         elevation: 0,
         leading: IconButton(
-          onPressed: () => context.pop(),
-          icon: const Icon(Icons.arrow_back),
-          color: Colors.white,
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () {
+            if (_isDirty && isEditMode) {
+              _save();
+            } else {
+              context.pop();
+            }
+          },
         ),
         actions: [
-          if (isEditMode)
+          if (!isEditMode)
+            IconButton(
+              icon: Icon(
+                Icons.edit_outlined,
+                color: AppColors.notes,
+              ),
+              onPressed: () {
+                setState(() => isEditMode = true);
+                bodyFocus.requestFocus();
+              },
+            )
+          else
             TextButton(
-              onPressed: _saveNote,
+              onPressed: _save,
               child: Text(
                 'Done',
                 style: TextStyle(
                   color: AppColors.notes,
-                  fontSize: AppSizes.fontMd,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-            )
-          else
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: () => setState(() => isEditMode = true),
-                  icon: Icon(Icons.edit_outlined, color: AppColors.notes),
-                ),
-                IconButton(
-                  onPressed: _deleteNote,
-                  icon: Icon(Icons.delete_outline, color: AppColors.error),
-                ),
-              ],
+            ),
+          if (!isEditMode)
+            IconButton(
+              icon: Icon(
+                Icons.delete_outline,
+                color: AppColors.error,
+              ),
+              onPressed: () => _confirmDelete(),
             ),
         ],
-        title: Text(
-          _displayTitle,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: isEditMode
-              ? _buildEditMode(updatedAt)
-              : _buildViewMode(updatedAt),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildViewMode(DateTime updatedAt) {
-    final title = _displayTitle;
-    final body = bodyController.text.trim().isEmpty
-        ? 'No content yet.'
-        : bodyController.text.trim();
-
-    return GestureDetector(
-      key: const ValueKey('view-mode'),
-      onTap: () => setState(() => isEditMode = true),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      body: Column(
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(AppSizes.screenPadding),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Title
+                  isEditMode
+                      ? TextField(
+                          controller: titleController,
+                          textCapitalization: TextCapitalization.sentences,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          decoration: const InputDecoration(
+                            hintText: 'Title',
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                          ),
+                        )
+                      : Text(
+                          titleController.text.isEmpty
+                              ? 'Untitled'
+                              : titleController.text,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+
+                  Divider(color: AppColors.border, height: 24),
+
+                  // Body
+                  isEditMode
+                      ? TextField(
+                          controller: bodyController,
+                          focusNode: bodyFocus,
+                          textCapitalization: TextCapitalization.sentences,
+                          maxLines: null,
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 16,
+                            height: 1.6,
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Start writing...',
+                            hintStyle: TextStyle(
+                              color: AppColors.textHint,
+                            ),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                          ),
+                          onChanged: _onBodyChanged,
+                        )
+                      : SelectableText(
+                          bodyController.text,
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 16,
+                            height: 1.6,
+                          ),
+                        ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            DateFormat('hh:mm a').format(updatedAt),
-            style: TextStyle(color: AppColors.textHint, fontSize: 12),
+
+          // Toolbar — only in edit mode
+          if (isEditMode)
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                border: Border(
+                  top: BorderSide(color: AppColors.border, width: 0.5),
+                ),
+              ),
+              child: Row(
+                children: [
+                  // Bold
+                  _ToolbarButton(
+                    label: 'B',
+                    bold: true,
+                    onTap: () {
+                      final sel = bodyController.selection;
+                      if (!sel.isValid || sel.isCollapsed) return;
+                      final selected = bodyController.text
+                          .substring(sel.start, sel.end);
+                      final newText =
+                          bodyController.text.substring(0, sel.start) +
+                              '**$selected**' +
+                              bodyController.text.substring(sel.end);
+                      bodyController.value = TextEditingValue(
+                        text: newText,
+                        selection: TextSelection.collapsed(
+                          offset: sel.end + 4,
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 4),
+                  // Italic
+                  _ToolbarButton(
+                    label: 'I',
+                    italic: true,
+                    onTap: () {
+                      final sel = bodyController.selection;
+                      if (!sel.isValid || sel.isCollapsed) return;
+                      final selected = bodyController.text
+                          .substring(sel.start, sel.end);
+                      final newText =
+                          bodyController.text.substring(0, sel.start) +
+                              '_${selected}_' +
+                              bodyController.text.substring(sel.end);
+                      bodyController.value = TextEditingValue(
+                        text: newText,
+                        selection: TextSelection.collapsed(
+                          offset: sel.end + 2,
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(width: 4),
+                  // Bullet point — THE NEW BUTTON
+                  _ToolbarButton(
+                    icon: Icons.format_list_bulleted,
+                    onTap: _insertBullet,
+                    tooltip: 'Bullet point',
+                  ),
+                  const SizedBox(width: 4),
+                  // Checkbox item
+                  _ToolbarButton(
+                    icon: Icons.check_box_outline_blank,
+                    onTap: () {
+                      final controller = bodyController;
+                      final text = controller.text;
+                      final sel = controller.selection;
+                      final pos =
+                          sel.isValid ? sel.baseOffset : text.length;
+                      final newText =
+                          text.substring(0, pos) +
+                              '☐ ' +
+                              text.substring(pos);
+                      controller.value = TextEditingValue(
+                        text: newText,
+                        selection: TextSelection.collapsed(
+                          offset: pos + 2,
+                        ),
+                      );
+                      bodyFocus.requestFocus();
+                    },
+                    tooltip: 'Checkbox',
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    width: 1,
+                    height: 24,
+                    color: AppColors.border,
+                  ),
+                  const SizedBox(width: 8),
+                  // Color dots
+                  ...List.generate(_colorOptions.length, (index) {
+                    final isSelected = colorLabel == _colorOptions[index];
+                    return GestureDetector(
+                      onTap: () => setState(
+                        () => colorLabel = _colorOptions[index],
+                      ),
+                      child: Container(
+                        width: 24,
+                        height: 24,
+                        margin: const EdgeInsets.only(right: 6),
+                        decoration: BoxDecoration(
+                          color: _colorDisplay[index],
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: isSelected
+                                ? Colors.white
+                                : Colors.transparent,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        title: const Text(
+          'Delete note?',
+          style: TextStyle(color: Colors.white, fontSize: 16),
+        ),
+        content: Text(
+          'This note will be permanently deleted.',
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 14,
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Divider(color: AppColors.border, height: 1),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: AppColors.textHint),
+            ),
           ),
-          Expanded(
-            child: SelectableText(
-              body,
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(
+              'Delete',
               style: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 16,
-                height: 1.6,
+                color: AppColors.error,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
         ],
       ),
     );
-  }
 
-  Widget _buildEditMode(DateTime updatedAt) {
-    return Column(
-      key: const ValueKey('edit-mode'),
-      children: [
-        TextField(
-          controller: titleController,
-          onChanged: (_) => setState(() {}),
-          textCapitalization: TextCapitalization.words,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
-          decoration: InputDecoration(
-            hintText: 'Title',
-            hintStyle: TextStyle(
-              color: AppColors.textHint,
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
-            border: InputBorder.none,
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Divider(color: AppColors.border, height: 1),
-        ),
-        Expanded(
-          child: TextField(
-            controller: bodyController,
-            onChanged: (_) => setState(() {}),
-            expands: true,
-            maxLines: null,
-            minLines: null,
-            textCapitalization: TextCapitalization.sentences,
-            textAlign: TextAlign.start,
-            textAlignVertical: TextAlignVertical.top,
-            style: TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: AppSizes.fontLg,
-            ),
-            decoration: InputDecoration(
-              hintText: 'Start writing...',
-              hintStyle: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: AppSizes.fontLg,
-              ),
-              contentPadding: EdgeInsets.zero,
-              border: InputBorder.none,
-            ),
-          ),
-        ),
-        Row(
-          children: [
-            ...colorOptions.map((hex) {
-              final isSelected = colorLabel == hex;
-              return GestureDetector(
-                onTap: () {
-                  setState(() {
-                    colorLabel = hex;
-                  });
-                },
-                child: Container(
-                  width: 20,
-                  height: 20,
-                  margin: EdgeInsets.only(right: AppSizes.sm),
-                  decoration: BoxDecoration(
-                    color: _parseColor(hex),
-                    shape: BoxShape.circle,
-                    border: isSelected
-                        ? Border.all(color: Colors.white, width: 2)
-                        : null,
-                  ),
-                ),
-              );
-            }),
-            const Spacer(),
-            Text(
-              DateFormat('hh:mm a').format(updatedAt),
-              style: TextStyle(
-                color: AppColors.textHint,
-                fontSize: AppSizes.fontSm,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
+    if (confirm == true && mounted) {
+      if (existingNote != null) {
+        await ref.read(notesProvider.notifier).deleteNote(existingNote!.id);
+      }
+      if (mounted) context.pop();
+    }
   }
 }
 
-extension<T> on Iterable<T> {
-  T? get firstOrNull {
-    if (isEmpty) return null;
-    return first;
+class _ToolbarButton extends StatelessWidget {
+  const _ToolbarButton({
+    this.label,
+    this.icon,
+    required this.onTap,
+    this.bold = false,
+    this.italic = false,
+    this.tooltip,
+  });
+
+  final String? label;
+  final IconData? icon;
+  final VoidCallback onTap;
+  final bool bold;
+  final bool italic;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget child = icon != null
+        ? Icon(icon, color: AppColors.textSecondary, size: 18)
+        : Text(
+            label ?? '',
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 14,
+              fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+              fontStyle: italic ? FontStyle.italic : FontStyle.normal,
+            ),
+          );
+
+    return Tooltip(
+      message: tooltip ?? label ?? '',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: AppColors.surfaceVariant,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          alignment: Alignment.center,
+          child: child,
+        ),
+      ),
+    );
   }
 }

@@ -8,27 +8,18 @@ import '../../../core/constants/app_sizes.dart';
 import '../data/habit_model.dart';
 import '../domain/habit_notifier.dart';
 
-class HabitsScreen extends ConsumerStatefulWidget {
+class HabitsScreen extends ConsumerWidget {
   const HabitsScreen({super.key});
 
   @override
-  ConsumerState<HabitsScreen> createState() => _HabitsScreenState();
-}
-
-class _HabitsScreenState extends ConsumerState<HabitsScreen> {
-  static const List<String> _days = [
-    'Mon',
-    'Tue',
-    'Wed',
-    'Thu',
-    'Fri',
-    'Sat',
-    'Sun',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final habits = ref.watch(habitsProvider);
+    final todayStatus = ref.watch(todayHabitStatusProvider);
+    final repository = ref.watch(habitRepositoryProvider);
+
+    final now = DateTime.now();
+    final weekDays = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    final todayWeekday = now.weekday; // 1=Mon, 7=Sun
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -39,448 +30,717 @@ class _HabitsScreenState extends ConsumerState<HabitsScreen> {
           'Habits',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: AppSizes.md),
-            child: _WeeklyStrip(days: _days),
-          ),
-          SizedBox(height: AppSizes.md),
-          Expanded(
-            child: habits.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.local_florist_outlined,
-                          size: 64,
-                          color: AppColors.habits,
-                        ),
-                        SizedBox(height: AppSizes.sm),
-                        Text(
-                          'Build your first habit',
-                          style: TextStyle(
-                            color: AppColors.textHint,
-                            fontSize: AppSizes.fontMd,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : ListView.builder(
-                    padding: EdgeInsets.fromLTRB(
-                      AppSizes.md,
-                      0,
-                      AppSizes.md,
-                      96 + MediaQuery.of(context).padding.bottom,
-                    ),
-                    itemCount: habits.length,
-                    itemBuilder: (context, index) {
-                      final habit = habits[index];
-                      return _HabitCard(habit: habit);
-                    },
-                  ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.calendar_today_outlined, color: AppColors.habits),
+            onPressed: () {},
           ),
         ],
       ),
+      body: habits.isEmpty
+          ? _EmptyState()
+          : ListView(
+              padding: EdgeInsets.all(AppSizes.md),
+              children: [
+                // Weekly strip
+                _WeekStrip(
+                  weekDays: weekDays,
+                  todayWeekday: todayWeekday,
+                  habits: habits,
+                  todayStatus: todayStatus,
+                ),
+                SizedBox(height: AppSizes.md),
+
+                // Habit cards
+                ...habits.map(
+                  (habit) => _HabitCard(
+                    habit: habit,
+                    isCompletedToday: todayStatus[habit.id] ?? false,
+                    repository: repository,
+                  ),
+                ),
+              ],
+            ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: AppColors.habits,
         onPressed: () => context.push('/habits/add'),
-        child: const Icon(Icons.add),
+        child: const Icon(Icons.add, color: Colors.white),
       ),
     );
   }
 }
 
-class _WeeklyStrip extends StatelessWidget {
-  const _WeeklyStrip({required this.days});
+class _WeekStrip extends StatelessWidget {
+  const _WeekStrip({
+    required this.weekDays,
+    required this.todayWeekday,
+    required this.habits,
+    required this.todayStatus,
+  });
 
-  final List<String> days;
+  final List<String> weekDays;
+  final int todayWeekday;
+  final List<Habit> habits;
+  final Map<String, bool> todayStatus;
 
   @override
   Widget build(BuildContext context) {
-    final today = DateTime.now().weekday; // Mon=1 ... Sun=7
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: List.generate(days.length, (index) {
-        final dayIndex = index + 1;
-        final isToday = dayIndex == today;
-        final isPast = dayIndex < today;
-
-        Color circleColor;
-        Color textColor;
-        FontWeight fontWeight = FontWeight.w500;
-
-        if (isToday) {
-          circleColor = AppColors.habits;
-          textColor = Colors.white;
-          fontWeight = FontWeight.bold;
-        } else if (isPast) {
-          circleColor = AppColors.habits.withValues(alpha: 0.6);
-          textColor = Colors.white;
-        } else {
-          circleColor = AppColors.surfaceVariant;
-          textColor = AppColors.textHint;
-        }
-
-        return Column(
-          children: [
-            Text(
-              days[index],
-              style: TextStyle(
-                color: AppColors.textHint,
-                fontSize: AppSizes.fontXs,
-              ),
-            ),
-            SizedBox(height: AppSizes.xs),
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: circleColor,
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                '$dayIndex',
-                style: TextStyle(
-                  color: textColor,
-                  fontSize: AppSizes.fontSm,
-                  fontWeight: fontWeight,
-                ),
-              ),
-            ),
-          ],
-        );
-      }),
-    );
-  }
-}
-
-class _HabitCard extends ConsumerWidget {
-  const _HabitCard({required this.habit});
-
-  final Habit habit;
-
-  TimeOfDay? _parseMedicationTime(String value) {
-    try {
-      final parts = value.split(':');
-      return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
-    } catch (_) {
-      return null;
-    }
-  }
-
-  bool _isPastDose(TimeOfDay now, TimeOfDay doseTime) {
-    final nowMinutes = now.hour * 60 + now.minute;
-    final doseMinutes = doseTime.hour * 60 + doseTime.minute;
-    return nowMinutes > doseMinutes;
-  }
-
-  Future<void> _confirmDeleteHabit(BuildContext context, WidgetRef ref) async {
-    final shouldDelete = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete habit?'),
-        content: Text('"${habit.name}" will be archived.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: Text('Delete', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
-      ),
-    );
-
-    if (shouldDelete == true) {
-      await ref.read(habitsProvider.notifier).archiveHabit(habit.id);
-    }
-  }
-
-  Widget _buildMedicationDoseStatus({
-    required BuildContext context,
-    required WidgetRef ref,
-    required String todayDate,
-    required int doseIndex,
-    required bool isTaken,
-    required bool isPast,
-  }) {
-    final onTap = () {
-      ref
-          .read(habitsProvider.notifier)
-          .toggleMedicationDose(habit.id, todayDate, doseIndex);
-    };
-
-    if (isTaken) {
-      return GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: AppColors.habits,
-          ),
-          alignment: Alignment.center,
-          child: const Icon(Icons.check, color: Colors.white, size: 20),
-        ),
-      );
-    }
-
-    if (!isTaken && !isPast) {
-      return GestureDetector(
-        onTap: onTap,
-        child: Container(
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.transparent,
-            border: Border.all(color: AppColors.habits, width: 2),
-          ),
-        ),
-      );
-    }
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 28,
-        height: 28,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.transparent,
-          border: Border.all(color: AppColors.error, width: 2),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final repository = ref.watch(habitRepositoryProvider);
-    final todayStatus = ref.watch(todayHabitStatusProvider);
-    final isCompleted = todayStatus[habit.id] ?? false;
-    final streak = repository.getCurrentStreak(habit.id);
-    final todayDate = DateFormat('yyyy-MM-dd').format(DateTime.now());
-    final now = TimeOfDay.now();
-    final medicationTimesOfDay = habit.medicationTimesOfDay;
-
-    final allMedicationDosesTaken =
-        habit.isMedication &&
-        medicationTimesOfDay.isNotEmpty &&
-        List.generate(
-          medicationTimesOfDay.length,
-          (i) => repository.isMedicationDoseTaken(habit.id, todayDate, i),
-        ).every((taken) => taken);
-
-    TimeOfDay? nextUntakenMedicationTime;
-    bool hasMissedUntakenDose = false;
-    if (habit.isMedication && medicationTimesOfDay.isNotEmpty) {
-      for (var i = 0; i < medicationTimesOfDay.length; i++) {
-        final doseTime = medicationTimesOfDay[i];
-        final isTaken = repository.isMedicationDoseTaken(
-          habit.id,
-          todayDate,
-          i,
-        );
-        if (isTaken) continue;
-
-        if (_isPastDose(now, doseTime)) {
-          hasMissedUntakenDose = true;
-        } else {
-          nextUntakenMedicationTime = doseTime;
-          break;
-        }
-      }
-    }
-
+    final now = DateTime.now();
     return Container(
-      margin: EdgeInsets.only(bottom: AppSizes.md - AppSizes.xs),
       padding: EdgeInsets.all(AppSizes.md),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppSizes.radiusLg),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          GestureDetector(
-            onTap: () => context.push('/habits/detail/${habit.id}'),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: AppColors.habits.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(AppSizes.radiusMd),
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(habit.icon, style: const TextStyle(fontSize: 24)),
-                ),
-                SizedBox(width: AppSizes.md),
-              ],
+          Text(
+            'This Week',
+            style: TextStyle(
+              color: AppColors.textHint,
+              fontSize: AppSizes.fontXs,
+              letterSpacing: 1,
             ),
           ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GestureDetector(
-                  onTap: () => context.push('/habits/detail/${habit.id}'),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              habit.name,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: AppSizes.fontLg,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          if (habit.isMedication)
-                            const Text(' 💊', style: TextStyle(fontSize: 12)),
-                          IconButton(
-                            onPressed: () => _confirmDeleteHabit(context, ref),
-                            icon: Icon(
-                              Icons.delete_outline,
-                              color: AppColors.error,
-                              size: 20,
-                            ),
-                            tooltip: 'Delete habit',
-                            visualDensity: VisualDensity.compact,
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: AppSizes.xs),
-                      if (habit.isMedication &&
-                          habit.medicationTimes.isNotEmpty) ...[
-                        Text(
-                          allMedicationDosesTaken
-                              ? 'All doses taken for today ✓'
-                              : nextUntakenMedicationTime != null
-                              ? 'Next dose: ${nextUntakenMedicationTime.format(context)}'
-                              : hasMissedUntakenDose
-                              ? 'Dose not taken'
-                              : 'Next dose: --',
-                          style: TextStyle(
-                            color: allMedicationDosesTaken
-                                ? AppColors.expenses
-                                : hasMissedUntakenDose
-                                ? AppColors.error
-                                : AppColors.habits,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        SizedBox(height: AppSizes.xs),
-                      ],
-                      Row(
-                        children: [
-                          Text(
-                            '$streak',
-                            style: TextStyle(
-                              color: AppColors.habits,
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const Text(' 🔥 '),
-                          Text(
-                            'streak',
-                            style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+          SizedBox(height: AppSizes.sm),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: List.generate(7, (index) {
+              final weekday = index + 1; // 1=Mon
+              final isToday = weekday == todayWeekday;
+              final dayDate = now.subtract(
+                Duration(days: todayWeekday - weekday),
+              );
+              final isFuture = dayDate.isAfter(now);
+
+              return Column(
+                children: [
+                  Text(
+                    weekDays[index],
+                    style: TextStyle(
+                      color: isToday
+                          ? AppColors.habits
+                          : AppColors.textHint,
+                      fontSize: 11,
+                      fontWeight: isToday
+                          ? FontWeight.bold
+                          : FontWeight.normal,
+                    ),
                   ),
-                ),
-                if (habit.isMedication && habit.medicationTimes.isNotEmpty) ...[
-                  SizedBox(height: AppSizes.md),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: List.generate(habit.medicationTimes.length, (
-                      index,
-                    ) {
-                      final doseTime = _parseMedicationTime(
-                        habit.medicationTimes[index],
-                      );
-                      if (doseTime == null) return const SizedBox.shrink();
+                  SizedBox(height: AppSizes.xs),
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: isToday
+                          ? AppColors.habits
+                          : isFuture
+                          ? Colors.transparent
+                          : AppColors.surfaceVariant,
+                      shape: BoxShape.circle,
+                      border: isToday
+                          ? null
+                          : Border.all(
+                              color: AppColors.border,
+                              width: 0.5,
+                            ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      '${dayDate.day}',
+                      style: TextStyle(
+                        color: isToday
+                            ? Colors.white
+                            : isFuture
+                            ? AppColors.textHint
+                            : AppColors.textSecondary,
+                        fontSize: 13,
+                        fontWeight: isToday
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-                      final isTaken = repository.isMedicationDoseTaken(
-                        habit.id,
-                        todayDate,
-                        index,
-                      );
-                      final isPast = _isPastDose(now, doseTime);
+class _HabitCard extends ConsumerStatefulWidget {
+  const _HabitCard({
+    required this.habit,
+    required this.isCompletedToday,
+    required this.repository,
+  });
 
-                      return Padding(
-                        padding: EdgeInsets.only(
-                          bottom: index == habit.medicationTimes.length - 1
-                              ? 0
-                              : AppSizes.sm,
-                        ),
-                        child: Row(
+  final Habit habit;
+  final bool isCompletedToday;
+  final dynamic repository;
+
+  @override
+  ConsumerState<_HabitCard> createState() => _HabitCardState();
+}
+
+class _HabitCardState extends ConsumerState<_HabitCard> {
+  bool _showCalendar = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final habit = widget.habit;
+    final isCompleted = widget.isCompletedToday;
+    final currentStreak =
+        ref.watch(habitStreakProvider(habit.id))['current'] ?? 0;
+    final repository = ref.watch(habitRepositoryProvider);
+
+    return GestureDetector(
+      onLongPress: () => _showOptions(context),
+      child: Container(
+        margin: EdgeInsets.only(bottom: AppSizes.sm),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppSizes.radiusLg),
+        ),
+        child: Column(
+          children: [
+            // Main card row
+            Padding(
+              padding: EdgeInsets.all(AppSizes.md),
+              child: Row(
+                children: [
+                  // Habit icon
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.habits.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      habit.icon,
+                      style: const TextStyle(fontSize: 22),
+                    ),
+                  ),
+                  SizedBox(width: AppSizes.md),
+                  // Name + streak
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                           children: [
                             Text(
-                              doseTime.format(context),
-                              style: TextStyle(
-                                color: AppColors.textSecondary,
-                                fontSize: 13,
+                              habit.name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
-                            const Spacer(),
-                            _buildMedicationDoseStatus(
-                              context: context,
-                              ref: ref,
-                              todayDate: todayDate,
-                              doseIndex: index,
-                              isTaken: isTaken,
-                              isPast: isPast,
+                            if (habit.isMedication) ...[
+                              SizedBox(width: AppSizes.xs),
+                              Text(
+                                '💊',
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ],
+                        ),
+                        SizedBox(height: AppSizes.xs),
+                        Row(
+                          children: [
+                            Text(
+                              '🔥',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            SizedBox(width: AppSizes.xs),
+                            Text(
+                              '$currentStreak day streak',
+                              style: TextStyle(
+                                color: currentStreak > 0
+                                    ? AppColors.habits
+                                    : AppColors.textHint,
+                                fontSize: 13,
+                                fontWeight: currentStreak > 0
+                                    ? FontWeight.w600
+                                    : FontWeight.normal,
+                              ),
                             ),
                           ],
                         ),
-                      );
-                    }),
+                      ],
+                    ),
+                  ),
+                  // Toggle calendar button
+                  GestureDetector(
+                    onTap: () =>
+                        setState(() => _showCalendar = !_showCalendar),
+                    child: Icon(
+                      _showCalendar
+                          ? Icons.keyboard_arrow_up
+                          : Icons.calendar_month_outlined,
+                      color: AppColors.textHint,
+                      size: 20,
+                    ),
+                  ),
+                  SizedBox(width: AppSizes.sm),
+                  // Complete checkbox
+                  GestureDetector(
+                    onTap: () => ref
+                        .read(habitsProvider.notifier)
+                        .toggleToday(habit.id),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: isCompleted
+                            ? AppColors.habits
+                            : Colors.transparent,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: AppColors.habits,
+                          width: 2,
+                        ),
+                      ),
+                      child: isCompleted
+                          ? const Icon(
+                              Icons.check,
+                              color: Colors.white,
+                              size: 16,
+                            )
+                          : null,
+                    ),
                   ),
                 ],
-              ],
-            ),
-          ),
-          if (!habit.isMedication)
-            GestureDetector(
-              onTap: () =>
-                  ref.read(habitsProvider.notifier).toggleToday(habit.id),
-              child: Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isCompleted ? AppColors.habits : Colors.transparent,
-                  border: Border.all(color: AppColors.habits, width: 2),
-                ),
-                alignment: Alignment.center,
-                child: isCompleted
-                    ? const Icon(Icons.check, color: Colors.white, size: 16)
-                    : null,
               ),
             ),
+
+            // Calendar heatmap (expandable)
+            if (_showCalendar) ...[
+              Divider(
+                height: 1,
+                color: AppColors.border,
+              ),
+              Padding(
+                padding: EdgeInsets.all(AppSizes.md),
+                child: _MonthCalendar(
+                  habit: habit,
+                  repository: repository,
+                ),
+              ),
+            ],
+
+            // Medication doses
+            if (habit.isMedication && habit.medicationTimes.isNotEmpty)
+              _MedicationDoses(habit: habit),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showOptions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF1A1A1A),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            ListTile(
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.habits.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.edit_outlined,
+                  color: AppColors.habits,
+                  size: 20,
+                ),
+              ),
+              title: Text(
+                'Edit habit',
+                style: TextStyle(color: Colors.white, fontSize: 15),
+              ),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                context.push('/habits/add', extra: widget.habit);
+              },
+            ),
+            ListTile(
+              leading: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.error.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  Icons.delete_outline,
+                  color: AppColors.error,
+                  size: 20,
+                ),
+              ),
+              title: Text(
+                'Delete habit',
+                style: TextStyle(
+                  color: AppColors.error,
+                  fontSize: 15,
+                ),
+              ),
+              onTap: () async {
+                Navigator.of(sheetCtx).pop();
+                final confirm = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: AppColors.surface,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    title: const Text(
+                      'Delete habit?',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                    content: Text(
+                      'All streak data will be lost.',
+                      style: TextStyle(color: AppColors.textSecondary),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        child: Text('Cancel',
+                            style: TextStyle(color: AppColors.textHint)),
+                      ),
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        child: Text('Delete',
+                            style: TextStyle(color: AppColors.error)),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirm == true && context.mounted) {
+                  ref
+                      .read(habitsProvider.notifier)
+                      .archiveHabit(widget.habit.id);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Month calendar heatmap widget
+class _MonthCalendar extends StatelessWidget {
+  const _MonthCalendar({
+    required this.habit,
+    required this.repository,
+  });
+
+  final Habit habit;
+  final dynamic repository;
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final firstDay = DateTime(now.year, now.month, 1);
+    final daysInMonth =
+        DateTime(now.year, now.month + 1, 0).day;
+    final firstWeekday = firstDay.weekday; // 1=Mon
+
+    // Get completed dates for this month
+    final logs = repository.getLogsForHabit(habit.id) as List;
+    final completedDates = <String>{};
+    for (final log in logs) {
+      if (log.isCompleted) {
+        final date = DateTime.tryParse(log.date as String);
+        if (date != null &&
+            date.month == now.month &&
+            date.year == now.year) {
+          completedDates.add(log.date as String);
+        }
+      }
+    }
+
+    final dayNames = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Month label
+        Text(
+          DateFormat('MMMM yyyy').format(now),
+          style: TextStyle(
+            color: AppColors.habits,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
+          ),
+        ),
+        SizedBox(height: AppSizes.sm),
+        // Day name headers
+        Row(
+          children: dayNames
+              .map(
+                (d) => Expanded(
+                  child: Text(
+                    d,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: AppColors.textHint,
+                      fontSize: 10,
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+        ),
+        SizedBox(height: AppSizes.xs),
+        // Calendar grid
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate:
+              const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 7,
+            mainAxisSpacing: 4,
+            crossAxisSpacing: 4,
+            childAspectRatio: 1,
+          ),
+          itemCount: daysInMonth + firstWeekday - 1,
+          itemBuilder: (context, index) {
+            // Empty cells before first day
+            if (index < firstWeekday - 1) {
+              return const SizedBox.shrink();
+            }
+
+            final day = index - firstWeekday + 2;
+            final date = DateTime(now.year, now.month, day);
+            final dateStr =
+                DateFormat('yyyy-MM-dd').format(date);
+            final isCompleted = completedDates.contains(dateStr);
+            final isToday = day == now.day;
+            final isFuture = date.isAfter(now);
+
+            return Container(
+              decoration: BoxDecoration(
+                // Completed days get tinted
+                color: isCompleted
+                    ? AppColors.habits.withOpacity(0.35)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+                // Today gets border
+                border: isToday
+                    ? Border.all(
+                        color: AppColors.habits,
+                        width: 1.5,
+                      )
+                    : null,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '$day',
+                style: TextStyle(
+                  color: isCompleted
+                      ? AppColors.habits
+                      : isFuture
+                      ? AppColors.textHint.withOpacity(0.4)
+                      : AppColors.textSecondary,
+                  fontSize: 11,
+                  fontWeight: isToday || isCompleted
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _MedicationDoses extends ConsumerWidget {
+  const _MedicationDoses({required this.habit});
+
+  final Habit habit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final repository = ref.watch(habitRepositoryProvider);
+    final today = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    final now = TimeOfDay.now();
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        AppSizes.md,
+        0,
+        AppSizes.md,
+        AppSizes.md,
+      ),
+      child: Column(
+        children:
+            List.generate(habit.medicationTimes.length, (i) {
+          final timeStr = habit.medicationTimes[i];
+          final parts = timeStr.split(':');
+          final doseTime = TimeOfDay(
+            hour: int.tryParse(parts[0]) ?? 0,
+            minute: int.tryParse(parts[1]) ?? 0,
+          );
+          final isTaken = repository.isMedicationDoseTaken(
+            habit.id,
+            today,
+            i,
+          );
+          final isPast = doseTime.hour < now.hour ||
+              (doseTime.hour == now.hour &&
+                  doseTime.minute <= now.minute);
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              children: [
+                Text(
+                  '${doseTime.hour.toString().padLeft(2, '0')}:${doseTime.minute.toString().padLeft(2, '0')}',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
+                ),
+                const Spacer(),
+                if (isTaken)
+                  GestureDetector(
+                    onTap: () => ref
+                        .read(habitsProvider.notifier)
+                        .toggleMedicationDose(habit.id, today, i),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: AppColors.habits,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.check,
+                        color: Colors.white,
+                        size: 16,
+                      ),
+                    ),
+                  )
+                else if (!isPast)
+                  GestureDetector(
+                    onTap: () => ref
+                        .read(habitsProvider.notifier)
+                        .toggleMedicationDose(habit.id, today, i),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: AppColors.habits,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        color: AppColors.error,
+                        size: 14,
+                      ),
+                      SizedBox(width: AppSizes.xs),
+                      Text(
+                        'Dose not taken',
+                        style: TextStyle(
+                          color: AppColors.error,
+                          fontSize: 11,
+                        ),
+                      ),
+                      SizedBox(width: AppSizes.sm),
+                      GestureDetector(
+                        onTap: () => ref
+                            .read(habitsProvider.notifier)
+                            .toggleMedicationDose(
+                                habit.id, today, i),
+                        child: Text(
+                          'Mark taken',
+                          style: TextStyle(
+                            color: AppColors.habits,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('🌱', style: const TextStyle(fontSize: 64)),
+          const SizedBox(height: 16),
+          const Text(
+            'Build your first habit',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Tap + to get started',
+            style: TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 14,
+            ),
+          ),
         ],
       ),
     );

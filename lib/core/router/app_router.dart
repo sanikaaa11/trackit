@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../constants/app_colors.dart';
-import '../utils/account_scope.dart';
+import '../../core/utils/account_scope.dart';
 import '../../features/auth/presentation/auth_screen.dart';
+import '../../features/badges/presentation/badges_screen.dart';
 import '../../features/dashboard/presentation/dashboard_screen.dart';
 import '../../features/expenses/presentation/add_expense_screen.dart';
 import '../../features/expenses/presentation/expense_history_screen.dart';
@@ -22,45 +22,26 @@ import '../../features/onboarding/presentation/onboarding_budget_screen.dart';
 import '../../features/onboarding/presentation/onboarding_ready_screen.dart';
 import '../../features/onboarding/presentation/onboarding_vibe_screen.dart';
 import '../../features/onboarding/presentation/onboarding_welcome_screen.dart';
-import '../../features/profile/presentation/notifications_screen.dart';
 import '../../features/profile/presentation/profile_screen.dart';
+import '../../features/profile/presentation/notifications_screen.dart';
 import '../../features/splash/splash_screen.dart';
 import '../../features/tasks/presentation/add_task_screen.dart';
 import '../../features/tasks/presentation/tasks_screen.dart';
-import '../../features/badges/presentation/badges_screen.dart';
+import '../../shared/bottom_nav_shell.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     initialLocation: '/splash',
     redirect: (context, state) async {
+      // Only redirect from root
+      if (state.fullPath == '/splash') return null;
+      if (state.fullPath == '/auth') return null;
+      if (state.fullPath?.startsWith('/onboarding') ?? false) return null;
+
       await AccountScope.loadFromPrefs();
-      final prefs = await SharedPreferences.getInstance();
-      final hasSavedEmail = AccountScope.hasActiveUser;
-      final hasCompletedOnboarding =
-          hasSavedEmail &&
-          (prefs.getBool(AccountScope.scopedPrefKey('hasCompletedOnboarding')) ??
-              false);
-      final location = state.matchedLocation;
-      final isOnboardingRoute = location.startsWith('/onboarding');
-      final isAuthRoute = location == '/auth';
-
-      // Let splash handle its own delayed navigation logic.
-      if (location == '/splash') {
-        return null;
-      }
-
-      if (!hasSavedEmail && !isAuthRoute) {
+      if (!AccountScope.hasActiveUser) {
         return '/auth';
       }
-
-      if (hasSavedEmail && !hasCompletedOnboarding && !isOnboardingRoute) {
-        return '/onboarding/welcome';
-      }
-
-      if (hasCompletedOnboarding && (isOnboardingRoute || isAuthRoute)) {
-        return '/home';
-      }
-
       return null;
     },
     routes: [
@@ -88,35 +69,62 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/onboarding/ready',
         builder: (context, state) => const OnboardingReadyScreen(),
       ),
-      GoRoute(
-        path: '/',
-        redirect: (context, state) => '/home',
+      StatefulShellRoute.indexedStack(
+  builder: (context, state, navigationShell) {
+    return Scaffold(
+      body: navigationShell,
+      bottomNavigationBar: BottomNavShell(
+        navigationShell: navigationShell,
       ),
-      ShellRoute(
-        builder: (context, state, child) => MainShellScaffold(child: child),
-        routes: [
-          GoRoute(
-            path: '/home',
-            builder: (context, state) => const DashboardScreen(),
-          ),
-          GoRoute(
-            path: '/tasks',
-            builder: (context, state) => const TasksScreen(),
-          ),
-          GoRoute(
-            path: '/notes',
-            builder: (context, state) => const NotesScreen(),
-          ),
-          GoRoute(
-            path: '/expenses',
-            builder: (context, state) => const ExpenseHomeScreen(),
-          ),
-          GoRoute(
-            path: '/habits',
-            builder: (context, state) => const HabitsScreen(),
-          ),
-        ],
-      ),
+    );
+  },
+  branches: [
+    StatefulShellBranch(
+      routes: [
+        GoRoute(
+          path: '/home',
+          builder: (context, state) => const DashboardScreen(),
+        ),
+      ],
+    ),
+
+    StatefulShellBranch(
+      routes: [
+        GoRoute(
+          path: '/tasks',
+          builder: (context, state) => const TasksScreen(),
+        ),
+      ],
+    ),
+
+    StatefulShellBranch(
+      routes: [
+        GoRoute(
+          path: '/notes',
+          builder: (context, state) => const NotesScreen(),
+        ),
+      ],
+    ),
+
+    StatefulShellBranch(
+      routes: [
+        GoRoute(
+          path: '/expenses',
+          builder: (context, state) => const ExpenseHomeScreen(),
+        ),
+      ],
+    ),
+
+    StatefulShellBranch(
+      routes: [
+        GoRoute(
+          path: '/habits',
+          builder: (context, state) => const HabitsScreen(),
+        ),
+      ],
+    ),
+  ],
+),
       GoRoute(
         path: '/tasks/add',
         builder: (context, state) => const AddTaskScreen(),
@@ -124,7 +132,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/notes/edit/:id',
         builder: (context, state) =>
-        NoteEditorScreen(noteId: state.pathParameters['id'] ?? ''),
+            NoteEditorScreen(noteId: state.pathParameters['id'] ?? 'new'),
       ),
       GoRoute(
         path: '/journal',
@@ -137,11 +145,8 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/expenses/add',
-        builder: (context, state) => AddExpenseScreen(
-          extra: state.extra is Map<String, dynamic>
-              ? state.extra as Map<String, dynamic>
-              : null,
-        ),
+        builder: (context, state) =>
+            AddExpenseScreen(extra: state.extra as Map<String, dynamic>?),
       ),
       GoRoute(
         path: '/expenses/report',
@@ -152,13 +157,9 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ExpenseHistoryScreen(),
       ),
       GoRoute(
-        path: '/habits/add',
-        builder: (context, state) => const AddHabitScreen(),
-      ),
-      GoRoute(
-        path: '/habits/edit/:id',
-        builder: (context, state) => AddHabitScreen(habitId: state.pathParameters['id'] ?? ''),
-      ),
+  path: '/habits/add',
+  builder: (context, state) => const AddHabitScreen(),
+),
       GoRoute(
         path: '/habits/detail/:id',
         builder: (context, state) =>
@@ -179,107 +180,3 @@ final routerProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
-
-class MainShellScaffold extends StatelessWidget {
-  const MainShellScaffold({super.key, required this.child});
-
-  final Widget child;
-
-  int _indexFromLocation(String location) {
-    if (location.startsWith('/tasks')) return 1;
-    if (location.startsWith('/notes')) return 2;
-    if (location.startsWith('/expenses')) return 3;
-    if (location.startsWith('/habits')) return 4;
-    return 0;
-  }
-
-  Color _selectedColorForIndex(int index) {
-    switch (index) {
-      case 0:
-        return AppColors.tasks;
-      case 1:
-        return AppColors.tasks;
-      case 2:
-        return AppColors.notes;
-      case 3:
-        return AppColors.expenses;
-      case 4:
-        return AppColors.habits;
-      default:
-        return AppColors.tasks;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final location = GoRouterState.of(context).matchedLocation;
-    final currentIndex = _indexFromLocation(location);
-
-    return Scaffold(
-      body: child,
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: currentIndex,
-        backgroundColor: AppColors.surface,
-        unselectedItemColor: AppColors.textHint,
-        selectedItemColor: _selectedColorForIndex(currentIndex),
-        type: BottomNavigationBarType.fixed,
-        onTap: (index) {
-          switch (index) {
-            case 0:
-              context.go('/home');
-              break;
-            case 1:
-              context.go('/tasks');
-              break;
-            case 2:
-              context.go('/notes');
-              break;
-            case 3:
-              context.go('/expenses');
-              break;
-            case 4:
-              context.go('/habits');
-              break;
-          }
-        },
-        items: [
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.home,
-              color: currentIndex == 0 ? AppColors.tasks : AppColors.textHint,
-            ),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.check_box,
-              color: currentIndex == 1 ? AppColors.tasks : AppColors.textHint,
-            ),
-            label: 'Tasks',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.note,
-              color: currentIndex == 2 ? AppColors.notes : AppColors.textHint,
-            ),
-            label: 'Notes',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.pie_chart,
-              color: currentIndex == 3 ? AppColors.expenses : AppColors.textHint,
-            ),
-            label: 'Expenses',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(
-              Icons.track_changes,
-              color: currentIndex == 4 ? AppColors.habits : AppColors.textHint,
-            ),
-            label: 'Habits',
-          ),
-        ],
-      ),
-    );
-  }
-}
